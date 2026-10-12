@@ -1,0 +1,6 @@
+secrets.h
+*.wav
+biolingo_data/
+hpk_data/
+__pycache__/
+.DS_Store

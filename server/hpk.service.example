@@ -1,0 +1,16 @@
+# /etc/systemd/system/hpk.service - HPK field ingest (FastAPI, port 8080)
+[Unit]
+Description=Biolingo HPK field ingest server
+After=network-online.target
+
+[Service]
+User=hpk
+WorkingDirectory=/opt/hpk
+Environment=BIOLINGO_DATA=/var/lib/hpk/data
+Environment=BIOLINGO_TOKEN=replace-with-the-same-token-as-secrets.h
+ExecStart=/opt/hpk/venv/bin/python /opt/hpk/server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
