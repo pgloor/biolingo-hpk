@@ -210,7 +210,10 @@ async def live_push(device: str = Form(...), token: str = Form(""),
         raise HTTPException(status_code=400, detail="bad samples")
     if not vals:
         return {"ok": True, "n": 0}
-    end = t_end if t_end > 1e9 else now_epoch()
+    # Trust the device's NTP stamp only if it agrees with the server clock; a box
+    # whose clock is off (seen: -70 s on a university network) would otherwise
+    # never fall inside the GUI's 60-s live window.
+    end = t_end if abs(t_end - now_epoch()) < 30 else now_epoch()
     dt = 1.0 / LIVE_HZ
     start = end - dt * (len(vals) - 1)
     buf = LIVE[device]
