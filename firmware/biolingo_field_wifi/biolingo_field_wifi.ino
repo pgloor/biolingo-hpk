@@ -6,13 +6,14 @@
  * WAV chunks to hpk.biolingo.org over a phone hotspot. No BLE to the phone,
  * no Raspberry Pi gateway.
  *
- * Acquisition chain: 400 Hz sample, MAINS NOTCH (8-sample moving average =
- * exactly one 50 Hz period -> zero gain at 50/100/150/200 Hz), stored at the
- * full 400 Hz as int16 mV*10. Nothing else is thrown away: the ~21 Hz low-pass
- * and the 4x decimation of earlier versions are off by default (STORE_LOWPASS,
- * OUTPUT_RATE) and belong in the analysis, where they can be undone. The HP
- * ~0.1 Hz is still computed for the display only. 400 Hz x 2 bytes = 48 kB/min,
- * ~70 MB/day per box.
+ * Acquisition chain (Oct 2026): 400 Hz raw ADC readings stored as int16 mV*10,
+ * nothing applied before storage. A railed reading is therefore visible in the
+ * file as 0 or 3300 mV (-> offline rail mask), and the mains notch (8-sample
+ * moving average = exactly one 50 Hz period at 400 Hz) is applied offline,
+ * where it gives the identical result and can be undone. STORE_NOTCH 1 and
+ * STORE_LOWPASS 1 restore the earlier on-device filtering; OUTPUT_RATE 100
+ * the earlier 4x decimation. The notch/LP/HP are still computed on the box
+ * for the display and the live preview. 400 Hz x 2 bytes = ~70 MB/day per box.
  *
  * Sept 2026: the notch was added after Moritz's field tests. Without it ~23 %
  * of the mains hum (LP -9 dB, 4-pt average -4 dB) survived into the 100 Hz
@@ -85,6 +86,7 @@ const char* password = WIFI_PASS;
 // and 1000000/400 = 2500 us exactly, so no rounding either.
 const int   SAMPLE_RATE        = 400;
 const int   OUTPUT_RATE        = 400;   // store everything; was 100 (4x decimation) until Oct 2026
+#define     STORE_NOTCH          0      // 1 = apply the 50 Hz notch before storing (do it offline instead)
 #define     STORE_LOWPASS        0      // 1 = apply the ~21 Hz LP before storing (old behaviour)
 const int   SAMPLE_INTERVAL_US = 1000000 / SAMPLE_RATE;       // 2500 exactly
 const int   DECIMATION_FACTOR  = SAMPLE_RATE / OUTPUT_RATE;   // 4 exactly
@@ -204,17 +206,21 @@ static void sampleCb(void*) {
 #if STORE_LOWPASS
   float lpMv  = applyMainsNotch(applyLowpass(rawMv));   // LP, then kill 50 Hz + harmonics
 #else
-  float lpMv  = applyMainsNotch(rawMv);                 // kill 50 Hz + harmonics only
+  float lpMv  = applyMainsNotch(rawMv);                 // kill 50 Hz + harmonics (display/preview)
 #endif
   float hp    = applyHighpass(lpMv); (void)hp;    // computed, not output (as Stefan)
 
-  lastMv = lpMv;
+  lastMv = lpMv;                                  // display, heartbeat mv/p2p: notched
   if (lpMv < winMin) winMin = lpMv;
   if (lpMv > winMax) winMax = lpMv;
   if (lpMv < gateMin) gateMin = lpMv;
   if (lpMv > gateMax) gateMax = lpMv;
 
+#if STORE_NOTCH
   decimationAccumulator += lpMv;
+#else
+  decimationAccumulator += rawMv;                 // stored: raw reading, rails visible
+#endif
   if (++decimationCounter < DECIMATION_FACTOR) return;
 
   float dec = decimationAccumulator / DECIMATION_FACTOR;
