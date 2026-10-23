@@ -247,7 +247,12 @@ static void sampleCb(void*) {
   }
   if (++liveDecCnt >= OUTPUT_RATE * 2 / 25) {  // exactly 12.5 Hz preview (server LIVE_HZ) at any output rate
     liveDecCnt = 0;
-    if (liveCount < LIVE_CAP) liveBuf[liveCount++] = sm;
+    // Preview the notched value, not the stored raw reading: 32 raw samples are
+    // exactly four mains periods, so a raw strobe would always hit the same hum
+    // phase and show a flat line at a rail when the input is railed.
+    int32_t lv = (int32_t)roundf(lastMv * 10.0);
+    if (lv > 32767) lv = 32767; if (lv < -32768) lv = -32768;
+    if (liveCount < LIVE_CAP) liveBuf[liveCount++] = (int16_t)lv;
   }
   portEXIT_CRITICAL_ISR(&qSpin);
 }
