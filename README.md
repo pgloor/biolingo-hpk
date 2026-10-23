@@ -7,8 +7,11 @@ Herz-Pflanzen-Kommunikation (HPK) eurythmy field work; also used for the Aarau o
 ## Layout
 
 - `firmware/biolingo_field_wifi/` — Arduino sketch for the node. Samples the AD8232 at 400 Hz,
-  low-pass ~18 Hz, 8-sample moving average as 50 Hz notch, decimates 4× to 100 Hz,
-  writes 5-minute WAV chunks (int16 = mV × 10), uploads them by HTTP POST, pushes a
+  8-sample moving average as 50 Hz notch (exactly one mains period, so 50/100/150 Hz are nulled),
+  and stores the full 400 Hz (int16 = mV × 10) — no low-pass, no decimation, so nothing is
+  thrown away before analysis (~70 MB/day per node). Files before 23 Oct 2026 are 100 Hz with
+  an ~18 Hz low-pass; `sample_rate` in the WAV header says which. Writes 5-minute WAV chunks,
+  uploads them by HTTP POST, pushes a
   12.5 Hz live preview every 2 s, heartbeat every 10 s with electrode diagnostics
   (`mv`, `p2p`, `sat` = fraction of raw ADC samples at a rail). PSRAM store-and-forward queue,
   so nothing is lost while WiFi or the server is down. Per-node `NODE_NUM` and `ROLE`.

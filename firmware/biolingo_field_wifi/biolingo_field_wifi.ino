@@ -6,9 +6,13 @@
  * WAV chunks to hpk.biolingo.org over a phone hotspot. No BLE to the phone,
  * no Raspberry Pi gateway.
  *
- * Acquisition chain: 400 Hz sample, LP ~21 Hz, MAINS NOTCH (8-sample moving
- * average = exactly one 50 Hz period -> zero gain at 50/100/150/200 Hz),
- * HP ~0.1 Hz (computed, not stored), decimate 4x -> 100 Hz output, int16 mV*10.
+ * Acquisition chain: 400 Hz sample, MAINS NOTCH (8-sample moving average =
+ * exactly one 50 Hz period -> zero gain at 50/100/150/200 Hz), stored at the
+ * full 400 Hz as int16 mV*10. Nothing else is thrown away: the ~21 Hz low-pass
+ * and the 4x decimation of earlier versions are off by default (STORE_LOWPASS,
+ * OUTPUT_RATE) and belong in the analysis, where they can be undone. The HP
+ * ~0.1 Hz is still computed for the display only. 400 Hz x 2 bytes = 48 kB/min,
+ * ~70 MB/day per box.
  *
  * Sept 2026: the notch was added after Moritz's field tests. Without it ~23 %
  * of the mains hum (LP -9 dB, 4-pt average -4 dB) survived into the 100 Hz
@@ -80,7 +84,8 @@ const char* password = WIFI_PASS;
 // wrong), giving 126.7 Hz while headers claimed 100 Hz. 400/4 = 100 exactly
 // and 1000000/400 = 2500 us exactly, so no rounding either.
 const int   SAMPLE_RATE        = 400;
-const int   OUTPUT_RATE        = 100;
+const int   OUTPUT_RATE        = 400;   // store everything; was 100 (4x decimation) until Oct 2026
+#define     STORE_LOWPASS        0      // 1 = apply the ~21 Hz LP before storing (old behaviour)
 const int   SAMPLE_INTERVAL_US = 1000000 / SAMPLE_RATE;       // 2500 exactly
 const int   DECIMATION_FACTOR  = SAMPLE_RATE / OUTPUT_RATE;   // 4 exactly
 static_assert(SAMPLE_RATE % OUTPUT_RATE == 0,
@@ -196,7 +201,11 @@ static void sampleCb(void*) {
   if (rawAdc <= SAT_MARGIN || rawAdc >= 4095 - SAT_MARGIN) satCount++;
   sampCount++;
   float rawMv = adcToVoltage(rawAdc);
+#if STORE_LOWPASS
   float lpMv  = applyMainsNotch(applyLowpass(rawMv));   // LP, then kill 50 Hz + harmonics
+#else
+  float lpMv  = applyMainsNotch(rawMv);                 // kill 50 Hz + harmonics only
+#endif
   float hp    = applyHighpass(lpMv); (void)hp;    // computed, not output (as Stefan)
 
   lastMv = lpMv;
@@ -230,7 +239,7 @@ static void sampleCb(void*) {
       else qTail = nxt;
     }
   }
-  if (++liveDecCnt >= 8) {                 // 100 Hz / 8 = 12.5 Hz preview
+  if (++liveDecCnt >= OUTPUT_RATE * 2 / 25) {  // exactly 12.5 Hz preview (server LIVE_HZ) at any output rate
     liveDecCnt = 0;
     if (liveCount < LIVE_CAP) liveBuf[liveCount++] = sm;
   }
