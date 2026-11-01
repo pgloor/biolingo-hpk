@@ -44,6 +44,33 @@ The device endpoints listen on 0.0.0.0:8080 (plain HTTP, token-protected); put n
 basic auth in front for the GUI (`/`, `/api/live`, `/api/status`, `/browse`), leave
 `/upload`, `/api/heartbeat` and `/api/live_push` reachable on 8080.
 
+## BDAS classroom view (bdas.biolingo.org)
+
+A simplified live page for teaching (Pflanzenkommunikation course, Biodynamische Ausbildung
+Schweiz, Rheinau, Nov 2026). Shows only boxes named `biolingo-bdas-*`, one tile per sensor.
+
+- `firmware/biolingo_bdas_wifi/` — the field firmware with two WiFi networks tried in order
+  (`WIFI_SSID_1`/`_2` in `secrets.h`, see `secrets.h.example`). A box moves to the next network
+  after 20 s without association, or after 3 failed uploads/heartbeats in a row (captive portal,
+  no internet). The OLED shows the network in use. Flash six times with `NODE_NUM` 1..6
+  (`biolingo-bdas-01` … `-06`); the plant-free dummy gets `ROLE "control"`.
+- `server/bdas.html` — the page (English). Per sensor: live trace with mV axis, a **Stimulus**
+  button that logs a marker (`/api/event`) and draws it on the trace, **Save** (upload the
+  unfinished chunk now and switch storing on) and **Download** (ZIP of that sensor's last 12 h
+  plus `markers.csv` and a README). Status badge and `rail %` = share of raw ADC samples at
+  0/3300 mV (`sat` from the heartbeat; > 5 % shows "check electrode"). `?box=3` = one sensor
+  alone, for a phone at the group's table.
+- `server/server.py` — the "BDAS classroom view" block adds `/bdas`, `/api/events_recent`,
+  `/api/bdas/files`, `/api/bdas/file/{id}`, `/api/bdas/zip`, `/api/bdas/save_now`. The
+  `/api/bdas/*` routes only ever serve `biolingo-bdas-*` boxes.
+- `server/update_bdas.py` — replaces (or inserts) that block in a deployed server script,
+  with a timestamped backup: `sudo python3 update_bdas.py /opt/hpk/server_hpk.py block.py`.
+- `server/nginx-bdas.conf.example` — vhost exposing only the page and the endpoints it needs;
+  everything else stays behind the HPK basic auth.
+
+Deploy: copy `bdas.html` next to the server script (read on every request, no restart needed
+for page changes), restart `hpk` after server changes, then nginx + `certbot --nginx -d bdas.biolingo.org`.
+
 ## Electrode rules learned the hard way
 
 - The AD8232 reference (third lead) must be on the **same object** as the two inputs:

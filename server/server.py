@@ -1089,6 +1089,142 @@ refresh();setInterval(refresh,5000);
 liveTick();setInterval(liveTick,1000);
 </script></body></html>"""
 
+# ---------------- BDAS classroom view (bdas.biolingo.org) ----------------
+# (the block ends at the "end BDAS" marker line below)
+# Installed with update_bdas.py (inserted above the __main__ line of
+# /opt/hpk/server_hpk.py); put bdas.html next to server_hpk.py (/opt/hpk/bdas.html).
+# The page is read on every request, so bdas.html can be edited without a restart.
+#
+# Everything here is limited to boxes named biolingo-bdas-*: the public
+# bdas.biolingo.org site can list and download THEIR recordings only.
+
+import tempfile, zipfile
+from fastapi.responses import StreamingResponse
+
+BDAS_PAGE = Path(__file__).with_name("bdas.html")
+BDAS_PREFIX = "biolingo-bdas"
+
+
+@app.get("/bdas", response_class=HTMLResponse)
+def bdas_gui():
+    try:
+        return BDAS_PAGE.read_text(encoding="utf-8")
+    except OSError:
+        return HTMLResponse("<p>bdas.html missing next to the server script</p>", status_code=500)
+
+
+@app.get("/api/events_recent")
+def events_recent(seconds: float = 300.0, prefix: str = BDAS_PREFIX):
+    """Stimulus / sham markers of the last few minutes, drawn on the live traces."""
+    since = now_epoch() - min(max(seconds, 1.0), 3600.0)
+    with db() as c:
+        rows = [dict(r) for r in c.execute(
+            "SELECT device, gesture, phase, server_epoch, note FROM events "
+            "WHERE server_epoch >= ? AND device LIKE ? ORDER BY server_epoch",
+            (since, prefix + "%"))]
+    return {"now": now_epoch(), "events": rows}
+
+
+def _bdas_device(device: str) -> str:
+    """'' = all course boxes; otherwise the name must be one of them."""
+    if device and not device.startswith(BDAS_PREFIX):
+        raise HTTPException(status_code=404, detail="unknown device")
+    return device or BDAS_PREFIX
+
+
+def _bdas_files(hours: float, device: str = ""):
+    since = now_epoch() - min(max(hours, 0.1), 24.0 * 14) * 3600
+    like = _bdas_device(device) + ("" if device else "%")
+    with db() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT id, device, role, path, start_epoch, sample_rate, duration, bytes "
+            "FROM files WHERE device LIKE ? AND start_epoch >= ? ORDER BY start_epoch DESC",
+            (like, since))]
+
+
+@app.get("/api/bdas/files")
+def bdas_files(hours: float = 12.0, device: str = ""):
+    """Stored WAV chunks of the course boxes (newest first)."""
+    out = []
+    for f in _bdas_files(hours, device):
+        f["filename"] = Path(f.pop("path")).name
+        out.append(f)
+    return {"now": now_epoch(), "files": out}
+
+
+@app.get("/api/bdas/file/{file_id}")
+def bdas_file(file_id: int):
+    """Download one chunk - only if it belongs to a course box."""
+    with db() as c:
+        r = c.execute("SELECT device, path FROM files WHERE id=?", (file_id,)).fetchone()
+    if not r or not r["device"].startswith(BDAS_PREFIX) or not Path(r["path"]).is_file():
+        return PlainTextResponse("not found", 404)
+    return FileResponse(r["path"], media_type="audio/wav", filename=Path(r["path"]).name)
+
+
+@app.get("/api/bdas/zip")
+def bdas_zip(hours: float = 12.0, device: str = ""):
+    """Recordings of the last `hours` as one ZIP - one sensor (device=...) or all:
+    the WAV chunks per box, the stimulus markers as markers.csv, and a README."""
+    files = _bdas_files(hours, device)
+    since = now_epoch() - min(max(hours, 0.1), 24.0 * 14) * 3600
+    like = _bdas_device(device) + ("" if device else "%")
+    with db() as c:
+        evs = [dict(r) for r in c.execute(
+            "SELECT device, gesture, note, server_epoch FROM events "
+            "WHERE device LIKE ? AND server_epoch >= ? ORDER BY server_epoch",
+            (like, since))]
+    tmp = tempfile.TemporaryFile()
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
+        for f in files:
+            p = Path(f["path"])
+            if p.is_file():
+                z.write(p, f"{f['device']}/{p.name}")
+        buf = io.StringIO(); w = csv.writer(buf)
+        w.writerow(["device", "label", "marker", "epoch_utc", "time_utc"])
+        for e in evs:
+            w.writerow([e["device"], e["note"] or "", e["gesture"], f"{e['server_epoch']:.3f}",
+                        datetime.fromtimestamp(e["server_epoch"], timezone.utc).isoformat()])
+        z.writestr("markers.csv", buf.getvalue())
+        z.writestr("README.txt",
+            "Biolingo plant recordings - Biodynamische Ausbildung Schweiz, Rheinau\n\n"
+            "One folder per sensor box. Each WAV is a chunk of up to 5 minutes,\n"
+            "mono int16; one sample = millivolts x 10 (divide by 10 for mV).\n"
+            "The sample rate is in the WAV header (400 Hz, raw, unfiltered).\n"
+            "The file name ends with the UTC start time and the Unix start time.\n"
+            "50 Hz mains hum is still in the raw data: an 8-sample moving average\n"
+            "removes it.\n\n"
+            "markers.csv: every Stimulus button press, with server time (UTC).\n")
+    tmp.seek(0)
+    who = ("sensor" + device[-2:]) if device else "all_sensors"
+    name = f"bdas_{who}_{datetime.now().strftime('%Y%m%d_%H%M')}.zip"
+
+    def stream():
+        try:
+            while True:
+                chunk = tmp.read(1 << 20)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            tmp.close()
+    return StreamingResponse(stream(), media_type="application/zip",
+                             headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+@app.post("/api/bdas/save_now")
+def bdas_save_now(device: str = ""):
+    """Ask one sensor (or all course boxes) to close and upload the current partial
+    chunk on its next heartbeat (~10 s), instead of waiting for the 5-minute
+    boundary. Also switches storing back on, in case a box was left in standby."""
+    like = _bdas_device(device) + ("" if device else "%")
+    with db() as c:
+        c.execute("UPDATE heartbeats SET flush_req=1, armed=1 WHERE device LIKE ?", (like,))
+    return {"ok": True}
+
+# ---------------- end BDAS ----------------
+
+
 if __name__ == "__main__":
     import uvicorn
     print(f"Biolingo field ingest on http://{HOST}:{PORT}  data -> {DATA_DIR}")
