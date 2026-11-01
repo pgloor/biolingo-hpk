@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Plants live · BDAS Rheinau</title>
+<style>
+:root{
+  --bg:#F6F3EA; --card:#FFFDF7; --line:#DDD6C2; --tx:#1F3A2B; --mut:#5A6155;
+  --stim:#C98A3A; --ok:#2F6B45; --ok-bg:#E2EFE4; --bad:#A63A22; --bad-bg:#F6E1DB;
+  --warn:#8A4C14; --warn-bg:#F7E8CF;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--tx);
+  font-family:"Nunito Sans",system-ui,-apple-system,"Segoe UI",Arial,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between;padding:16px 20px 8px}
+h1{font-size:24px;margin:0;font-weight:800}
+h1 span{font-weight:400;color:var(--mut)}
+.ctrl{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.ctrl .lbl{font-size:14px;color:var(--mut);margin-right:2px}
+.seg{border:1px solid var(--line);background:var(--card);color:var(--tx);border-radius:999px;
+  padding:7px 14px;font-size:15px;font-weight:700;cursor:pointer}
+.seg.act{background:var(--tx);color:#F6F3EA;border-color:var(--tx)}
+.legend{padding:0 20px 12px;font-size:14px;color:var(--mut);display:flex;gap:18px;flex-wrap:wrap}
+.legend i{display:inline-block;width:18px;height:0;border-top:3px solid var(--stim);vertical-align:middle;margin-right:6px}
+main{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;padding:0 20px 20px}
+@media (max-width:1300px){main{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:760px){main{grid-template-columns:1fr;padding:0 10px 14px}header{padding:12px 10px 6px}
+  .legend{padding:0 10px 10px}}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px 14px;
+  display:flex;flex-direction:column;gap:8px;min-width:0}
+.tile.ctl{background:#F5F6F9;border-color:#C9D0DE}
+.head{display:flex;align-items:center;gap:8px;min-width:0}
+.name{font-size:21px;font-weight:800;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.name:hover{text-decoration:underline dotted}
+.dev{font-size:12px;color:var(--mut);white-space:nowrap}
+.badge{font-size:13px;font-weight:700;border-radius:999px;padding:4px 10px;margin-left:auto;white-space:nowrap}
+.badge.on{background:var(--ok-bg);color:var(--ok)}
+.badge.off{background:var(--bad-bg);color:var(--bad)}
+.badge.warn{background:var(--warn-bg);color:var(--warn)}
+canvas{width:100%;height:230px;display:block;background:#FFFFFF;border:1px solid #ECE6D6;border-radius:10px}
+.foot{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.val{font-size:15px;color:var(--mut);flex-basis:100%;font-variant-numeric:tabular-nums;min-width:0}
+.saved{font-size:13px;color:var(--mut);margin-left:auto;text-align:right}
+.btn{border:1px solid var(--line);background:#FFFFFF;color:var(--tx);border-radius:10px;padding:10px 14px;
+  font-size:15px;font-weight:700;cursor:pointer;text-decoration:none;display:inline-block;white-space:nowrap}
+.mark{border:none;border-radius:10px;padding:11px 20px;font-size:17px;font-weight:800;cursor:pointer;
+  background:var(--stim);color:#1F2A20;white-space:nowrap}
+.mark:active{transform:scale(.97)}
+.empty{grid-column:1/-1;padding:40px;text-align:center;color:var(--mut);font-size:18px;
+  background:var(--card);border:1px dashed var(--line);border-radius:14px}
+body.single main{grid-template-columns:1fr;max-width:1100px;margin:0 auto}
+body.single canvas{height:52vh}
+body.single .mark{padding:18px 30px;font-size:22px}
+.toast{position:fixed;left:50%;top:14px;transform:translateX(-50%);background:var(--tx);color:#F6F3EA;
+  padding:10px 18px;border-radius:999px;font-weight:700;font-size:15px;opacity:0;transition:opacity .25s;pointer-events:none;z-index:5}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <h1>Plants live <span>· Biodynamische Ausbildung Schweiz, Rheinau</span></h1>
+  <div class="ctrl">
+    <span class="lbl">Window</span>
+    <button class="seg" data-win="30">30 s</button>
+    <button class="seg act" data-win="60">1 min</button>
+    <button class="seg" data-win="180">3 min</button>
+  </div>
+</header>
+<div class="legend">
+  <span><i></i>Stimulus marker</span>
+  <span>Control = sensor without a plant</span>
+  <span>rail % = share of samples stuck at 0 or 3300 mV (should be 0)</span>
+  <span>Save = upload the latest minutes now · Download = all recordings of this sensor (ZIP)</span>
+  <span>Click a name to rename it</span>
+</div>
+<main id="grid"><div class="empty" id="empty">Waiting for the sensors …</div></main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// Classroom view for the BDAS course. Reads the HPK server's /api/live and
+// /api/status, the stimulus markers from /api/events_recent, and the stored
+// WAV chunks from /api/bdas/files. Only boxes named biolingo-bdas-* are shown.
+// ?box=3 shows one box alone (for a phone at the group's table).
+const PREFIX = 'biolingo-bdas';
+const params = new URLSearchParams(location.search);
+const ONLY = params.get('box') ? parseInt(params.get('box'), 10) : null;
+if (ONLY) document.body.classList.add('single');
+
+let WIN = 60;
+let STATUS = {};          // device -> status row
+let EVENTS = [];          // [{device, gesture, server_epoch}]
+let LOCAL_MARKS = [];     // shown at once, until the server copy arrives
+let LIVE = {now: Date.now() / 1000, devices: {}};
+const tiles = {};
+
+const grid = document.getElementById('grid');
+const devNum = d => { const m = d.match(/(\d+)$/); return m ? parseInt(m[1], 10) : 0; };
+const mine = d => d.startsWith(PREFIX) && (!ONLY || devNum(d) === ONLY);
+function load(k){ try { return localStorage.getItem(k); } catch(e){ return null; } }
+function store(k,v){ try { v ? localStorage.setItem(k, v) : localStorage.removeItem(k); } catch(e){} }
+function roleOf(dev){
+  return (LIVE.devices[dev] && LIVE.devices[dev].role) || (STATUS[dev] && STATUS[dev].role) || '';
+}
+function label(dev){
+  const s = load('bdas_name_' + dev);
+  if (s) return s;
+  return 'Sensor ' + devNum(dev) + (roleOf(dev) === 'control' ? ' (control)' : '');
+}
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._h); toast._h = setTimeout(() => t.classList.remove('show'), 1800);
+}
+const hhmm = ep => new Date(ep * 1000).toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+
+// ---------- tiles ----------
+function ensureTile(dev){
+  if (tiles[dev]) return tiles[dev];
+  const empty = document.getElementById('empty'); if (empty) empty.remove();
+  const el = document.createElement('section'); el.className = 'tile';
+  el.innerHTML = `
+    <div class="head"><span class="name"></span><span class="dev"></span><span class="badge on">…</span></div>
+    <canvas></canvas>
+    <div class="foot"><span class="val">–</span>
+      <button class="mark" type="button">Stimulus</button>
+      <button class="btn save" type="button">Save</button>
+      <a class="btn dl">Download</a>
+      <span class="saved"></span></div>`;
+  const t = { el, name: el.querySelector('.name'), dev: el.querySelector('.dev'),
+              badge: el.querySelector('.badge'), cv: el.querySelector('canvas'),
+              val: el.querySelector('.val'), saved: el.querySelector('.saved') };
+  t.dev.title = dev;
+  const dl = el.querySelector('.dl');
+  dl.href = '/api/bdas/zip?hours=12&device=' + encodeURIComponent(dev);
+  dl.setAttribute('download', '');
+  el.querySelector('.save').onclick = () => saveNow(dev);
+  t.name.onclick = () => {
+    const n = prompt('Name for this sensor (e.g. “Sensor 2 · Kalanchoe”). Empty = default.', label(dev));
+    if (n === null) return;
+    store('bdas_name_' + dev, n.trim()); paintHead(dev);
+  };
+  el.querySelector('.mark').onclick = () => mark(dev);
+  tiles[dev] = t;
+  Object.keys(tiles).sort((a, b) => devNum(a) - devNum(b)).forEach(d => grid.appendChild(tiles[d].el));
+  paintHead(dev);
+  return t;
+}
+
+function paintHead(dev){
+  const t = tiles[dev]; if (!t) return;
+  t.el.classList.toggle('ctl', roleOf(dev) === 'control');
+  t.name.textContent = label(dev);
+  const s = STATUS[dev];
+  let cls = 'on', txt = 'live';
+  if (!s || !s.online)            { cls = 'off';  txt = 'no connection'; }
+  else if (s.state === 'flat')    { cls = 'warn'; txt = 'no signal'; }
+  else if ((s.sat || 0) > 5)      { cls = 'warn'; txt = 'check electrode · rail ' + Math.round(s.sat) + '%'; }
+  else if (!s.armed)              { cls = 'warn'; txt = 'not saving'; }
+  t.badge.className = 'badge ' + cls; t.badge.textContent = txt;
+}
+
+// ---------- stimulus marker ----------
+async function mark(dev){
+  const t = Date.now() / 1000;
+  LOCAL_MARKS.push({ device: dev, gesture: 'STIMULUS', server_epoch: LIVE.now + (t - (LIVE._fetchedAt || t)), _local: t });
+  toast('Stimulus marked · ' + label(dev) + ' · ' + new Date().toLocaleTimeString('en-GB'));
+  draw();
+  try {
+    await fetch('/api/event', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: null, device: dev, gesture: 'STIMULUS', rep: 1, phase: 'mark',
+                             client_epoch: t, note: label(dev) }) });
+  } catch (e) { toast('Marker not saved — please note the time on paper'); }
+  pollEvents();
+}
+
+// ---------- drawing ----------
+function sizeCanvas(cv){
+  const dpr = window.devicePixelRatio || 1, r = cv.getBoundingClientRect();
+  const w = Math.max(50, Math.round(r.width * dpr)), h = Math.max(50, Math.round(r.height * dpr));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  return dpr;
+}
+
+function draw(){
+  const now = LIVE.now + (LIVE._fetchedAt ? (Date.now() / 1000 - LIVE._fetchedAt) : 0);
+  const t1 = now, t0 = t1 - WIN;
+  const marks = EVENTS.concat(LOCAL_MARKS);
+  Object.keys(tiles).forEach(dev => {
+    const t = tiles[dev], cv = t.cv, dpr = sizeCanvas(cv), x = cv.getContext('2d');
+    const W = cv.width, H = cv.height, padT = 24 * dpr, padB = 22 * dpr, padL = 58 * dpr;
+    x.clearRect(0, 0, W, H);
+    x.fillStyle = '#7A8077'; x.font = `${12 * dpr}px system-ui,sans-serif`; x.textBaseline = 'bottom';
+    x.textAlign = 'left';  x.fillText('−' + WIN + ' s', padL + 4 * dpr, H - 4 * dpr);
+    x.textAlign = 'right'; x.fillText('now', W - 6 * dpr, H - 4 * dpr);
+    x.textAlign = 'left'; x.textBaseline = 'top'; x.fillText('mV', 6 * dpr, 4 * dpr);
+
+    const px = tt => padL + (tt - t0) / WIN * (W - padL);
+    marks.filter(m => m.device === dev && m.server_epoch >= t0 && m.server_epoch <= t1 + 2).forEach(m => {
+      const X = Math.min(W - 2 * dpr, px(m.server_epoch)), right = X > W - 70 * dpr;
+      x.strokeStyle = '#C98A3A'; x.lineWidth = 3 * dpr;
+      x.beginPath(); x.moveTo(X, padT - 6 * dpr); x.lineTo(X, H - padB); x.stroke();
+      x.fillStyle = '#8A4C14'; x.font = `bold ${12 * dpr}px system-ui,sans-serif`;
+      x.textBaseline = 'top'; x.textAlign = right ? 'right' : 'left';
+      x.fillText('Stimulus', X + (right ? -4 : 4) * dpr, 4 * dpr);
+    });
+
+    const info = LIVE.devices[dev];
+    const pts = info ? info.points.filter(p => p[0] >= t0) : [];
+    if (pts.length < 2) { t.val.textContent = 'no data yet'; return; }
+    const vs = pts.map(p => p[1]);
+    let lo = Math.min(...vs), hi = Math.max(...vs);
+    // at least 10 mV tall, so noise on a calm trace (or the control) is not blown up
+    const span = Math.max(hi - lo, 10.0), mid = (hi + lo) / 2;
+    lo = mid - span / 2 - span * 0.12; hi = mid + span / 2 + span * 0.12;
+    const py = v => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+    // y axis: about 4 "nice" ticks (1, 2 or 5 x 10^k mV) with labels in mV
+    const raw = (hi - lo) / 4, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 5, 10].map(k => k * mag).find(s => s >= raw);
+    const dec = step < 1 ? 1 : 0;
+    x.font = `${12 * dpr}px system-ui,sans-serif`; x.textAlign = 'right'; x.textBaseline = 'middle';
+    for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+      const y = py(v);
+      x.strokeStyle = '#EFEAE0'; x.lineWidth = 1 * dpr;
+      x.beginPath(); x.moveTo(padL, y); x.lineTo(W, y); x.stroke();
+      x.fillStyle = '#7A8077'; x.fillText(v.toFixed(dec), padL - 6 * dpr, y);
+    }
+
+    x.strokeStyle = roleOf(dev) === 'control' ? '#4F5F80' : '#2F5528';
+    x.lineWidth = 2 * dpr; x.lineJoin = 'round'; x.beginPath();
+    let pen = false;
+    for (let i = 0; i < pts.length; i++) {
+      const [tt, v] = pts[i];
+      if (i > 0 && tt - pts[i - 1][0] > 1.5) { x.stroke(); x.beginPath(); pen = false; }   // gap: no fake line
+      const X = px(tt), Y = py(v);
+      pen ? x.lineTo(X, Y) : x.moveTo(X, Y); pen = true;
+    }
+    x.stroke();
+    const age = Math.max(0, now - pts[pts.length - 1][0]);
+    const st = STATUS[dev], sat = st && st.online ? (st.sat || 0) : null;
+    t.val.textContent = `${vs[vs.length - 1].toFixed(1)} mV · range ${(Math.max(...vs) - Math.min(...vs)).toFixed(1)} mV` +
+                        (sat !== null ? ` · rail ${sat < 1 && sat > 0 ? sat.toFixed(1) : Math.round(sat)}%` : '') +
+                        (age > 5 ? ` · nothing new for ${Math.round(age)} s` : '');
+  });
+}
+
+// ---------- per-sensor save / stored files ----------
+async function saveNow(dev){
+  try {
+    await fetch('/api/bdas/save_now?device=' + encodeURIComponent(dev), { method: 'POST' });
+    toast('Saving ' + label(dev) + ' — ready to download in about 20 seconds');
+    setTimeout(loadFiles, 15000); setTimeout(loadFiles, 30000);
+  } catch (e) { toast('Could not reach the server'); }
+}
+async function loadFiles(){
+  try {
+    const r = await fetch('/api/bdas/files?hours=12'); const d = await r.json();
+    const per = {};
+    (d.files || []).forEach(f => {
+      const p = per[f.device] || (per[f.device] = {n: 0, secs: 0, last: 0});
+      p.n++; p.secs += f.duration || 0; p.last = Math.max(p.last, f.start_epoch + (f.duration || 0));
+    });
+    Object.keys(tiles).forEach(dev => {
+      const p = per[dev];
+      tiles[dev].saved.textContent = p
+        ? `${p.n} file${p.n > 1 ? 's' : ''} · ${Math.round(p.secs / 60)} min saved · last until ${hhmm(p.last)}`
+        : 'nothing saved yet';
+    });
+  } catch (e) {}
+}
+
+// ---------- polling ----------
+async function pollLive(){
+  try {
+    const r = await fetch('/api/live?seconds=' + Math.max(WIN, 60));
+    const d = await r.json();
+    const devs = {};
+    Object.keys(d.devices || {}).filter(mine).forEach(k => devs[k] = d.devices[k]);
+    LIVE = { now: d.now, devices: devs, _fetchedAt: Date.now() / 1000 };
+    Object.keys(devs).forEach(ensureTile);
+  } catch (e) { /* keep the last picture */ }
+}
+async function pollStatus(){
+  try {
+    const r = await fetch('/api/status'); const s = await r.json();
+    STATUS = {};
+    (s.devices || []).filter(d => mine(d.device) && !d.hidden).forEach(d => STATUS[d.device] = d);
+    Object.keys(STATUS).forEach(ensureTile);
+    Object.keys(tiles).forEach(paintHead);
+  } catch (e) {}
+}
+async function pollEvents(){
+  try {
+    const r = await fetch('/api/events_recent?seconds=200&prefix=' + encodeURIComponent(PREFIX));
+    const d = await r.json();
+    EVENTS = (d.events || []).filter(e => mine(e.device || ''));
+    const nowL = Date.now() / 1000;
+    LOCAL_MARKS = LOCAL_MARKS.filter(m => nowL - m._local < 6);
+  } catch (e) {}
+}
+
+document.querySelectorAll('.seg').forEach(b => b.onclick = () => {
+  WIN = parseInt(b.dataset.win, 10);
+  document.querySelectorAll('.seg').forEach(o => o.classList.toggle('act', o === b));
+  draw();
+});
+window.addEventListener('resize', draw);
+
+pollStatus(); pollLive(); pollEvents(); setTimeout(loadFiles, 1500);
+setInterval(pollLive, 1000);
+setInterval(pollStatus, 5000);
+setInterval(pollEvents, 2000);
+setInterval(loadFiles, 20000);
+(function loop(){ draw(); setTimeout(loop, 250); })();
+</script>
+</body>
+</html>
